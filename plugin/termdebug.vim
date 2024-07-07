@@ -93,6 +93,8 @@ endfunc
 call s:Highlight(1, '', &background)
 hi default debugBreakpoint term=reverse ctermbg=red guibg=red
 hi default debugBreakpointDisabled term=reverse ctermbg=gray guibg=gray
+hi default EvalScrollbar ctermbg=232
+hi default EvalScrollbarThumb ctermbg=81
 
 " Get the command to execute the debugger as a list, defaults to ["gdb"].
 func s:GetCommand()
@@ -108,6 +110,10 @@ func s:GetCommand()
 endfunc
 
 func s:StartDebug(bang, ...)
+"   exe 'setlocal scrolloff=999'
+  let curwinid = win_getid(winnr())
+  call setbufvar(winbufnr(curwinid), '&scrolloff', '5')
+
   " First argument is the command to debug, second core file or process ID.
   call s:StartDebug_internal({'gdb_args': a:000, 'bang': a:bang})
 endfunc
@@ -219,11 +225,17 @@ func s:StartDebug_term(dict)
   let s:ptybuf = term_start('NONE', {
 	\ 'term_name': 'debugged program',
 	\ 'vertical': s:vertical,
+	\ 'hidden': 1,
 	\ })
   if s:ptybuf == 0
     echoerr 'Failed to open the program terminal window'
     return
   endif
+
+" Create a new tab for the program output window
+  exe 'tabnew'
+  exe 'tab b' . s:ptybuf
+
   let pty = job_info(term_getjob(s:ptybuf))['tty_out']
   let s:ptywin = win_getid(winnr())
   if s:vertical
@@ -247,6 +259,12 @@ func s:StartDebug_term(dict)
     exe 'bwipe! ' . s:ptybuf
     return
   endif
+
+" Create a new tab for the gdb communication window
+  exe 'tabnew'
+  exe 'tab b' . s:commbuf
+  exe 'tabfirst'
+
   let commpty = job_info(term_getjob(s:commbuf))['tty_out']
 
   let gdb_args = get(a:dict, 'gdb_args', [])
@@ -282,6 +300,7 @@ func s:StartDebug_term(dict)
   call ch_log('executing "' . join(gdb_cmd) . '"')
   let s:gdbbuf = term_start(gdb_cmd, {
 	\ 'term_finish': 'close',
+	\ 'vertical': s:vertical,
 	\ })
   if s:gdbbuf == 0
     echoerr 'Failed to open the gdb terminal window'
@@ -289,6 +308,8 @@ func s:StartDebug_term(dict)
     return
   endif
   let s:gdbwin = win_getid(winnr())
+
+"   call s:SendCommand('dashboard source')
 
   " Wait for the "startupdone" message before sending any commands.
   let try_count = 0
@@ -671,6 +692,7 @@ func s:EndTermDebug(job, status)
   unlet s:gdbwin
 
   call s:EndDebugCommon()
+  exe 'qall!'
 endfunc
 
 func s:EndDebugCommon()
@@ -855,7 +877,9 @@ func s:InstallCommands()
   command -nargs=? Break call s:SetBreakpoint(<q-args>)
   command Clear call s:ClearBreakpoint()
   command Step call s:SendResumingCommand('-exec-step')
+  command Stepi call s:SendResumingCommand('-exec-step-instruction')
   command Over call s:SendResumingCommand('-exec-next')
+  command Overi call s:SendResumingCommand('-exec-next-instruction')
   command -nargs=? Until call s:Until(<q-args>)
   command Finish call s:SendResumingCommand('-exec-finish')
   command -nargs=* Run call s:Run(<q-args>)
@@ -939,7 +963,9 @@ func s:DeleteCommands()
   delcommand Break
   delcommand Clear
   delcommand Step
+  delcommand Stepi
   delcommand Over
+  delcommand Overi
   delcommand Until
   delcommand Finish
   delcommand Run
@@ -1151,6 +1177,51 @@ endfunc
 let s:ignoreEvalError = 0
 let s:evalFromBalloonExpr = 0
 
+let s:evalSearchMode = 0
+let s:evalSearchString = ''
+func s:EvalPopupFilter(winid, key)
+    if s:evalSearchMode
+        if a:key ==# "\<cr>" || a:key ==# "\<c-j>"
+            let s:evalSearchMode = 0
+            call win_execute(a:winid, "call search('" . s:evalSearchString . "', 'c')")
+            echomsg s:evalSearchString
+        elseif a:key ==# "\<backspace>" || a:key ==# "\<c-h>"
+            let s:evalSearchString = s:evalSearchString[0:-2]
+            echomsg '> ' . s:evalSearchString
+        elseif a:key =~# '[a-zA-Z0-9_. =+-<>{}()\[\]"]'
+            let s:evalSearchString = s:evalSearchString . a:key
+            echomsg '> ' . s:evalSearchString
+        endif
+    else
+        if a:key ==# 'q' || a:key ==# 'l' || a:key ==# "h"
+            call popup_close(a:winid)
+        elseif a:key ==# 'j' || a:key ==# "\<down>"
+            call win_execute(a:winid, "normal! j")
+        elseif a:key ==# 'k' || a:key ==# "\<up>"
+            call win_execute(a:winid, "normal! k")
+        elseif a:key ==# 'g'
+            call win_execute(a:winid, "normal! gg")
+        elseif a:key ==# 'G'
+            call win_execute(a:winid, "normal! G")
+        elseif a:key ==# '/'
+            let s:evalSearchMode = 1
+            let s:evalSearchString = ''
+            echomsg '>'
+        elseif a:key ==# 'n'
+            call win_execute(a:winid, "call search('" . s:evalSearchString . "', 'w')")
+        elseif a:key ==# 'N'
+            call win_execute(a:winid, "call search('" . s:evalSearchString . "', 'bw')")
+        elseif a:key ==# "\<c-d>" || a:key ==# "\<pagedown>"
+            call win_execute(a:winid, "normal! 20\<c-d>")
+        elseif a:key ==# "\<c-u>" || a:key ==# "\<pageup>"
+            call win_execute(a:winid, "normal! 20\<c-u>")
+        " else
+        "    return v:false
+        endif
+    endif
+    return v:true
+endfunc
+
 " Handle the result of data-evaluate-expression
 func s:HandleEvaluate(msg)
   let value = a:msg
@@ -1173,16 +1244,43 @@ func s:HandleEvaluate(msg)
       let s:evalFromBalloonExprResult .= ' = ' . value
     endif
     call balloon_show(s:evalFromBalloonExprResult)
-  else
-    echomsg '"' . s:evalexpr . '": ' . value
   endif
 
   if s:evalexpr[0] != '*' && value =~ '^0x' && value != '0x0' && value !~ '"$'
     " Looks like a pointer, also display what it points to.
     let s:ignoreEvalError = 1
+    echomsg '"' . s:evalexpr . '": ' . value
     call s:SendEval('*' . s:evalexpr)
   else
     let s:evalFromBalloonExpr = 0
+
+    let s:evalSearchMode = 0
+    let tklist = split(value, '\\n')
+    let eval_winid = popup_create(tklist, #{
+                \ pos: 'botleft',
+                \ line: 'cursor-1',
+                \ col: 'cursor',
+                \ cursorline: v:true,
+                \ firstline: 1,
+                \ zindex: 200,
+                \ padding: [0,1,0,1],
+                \ mapping: v:false,
+                \ minwidth: 60,
+                \ maxwidth: 60,
+                \ maxheight: 20,
+                \ border:[],
+                \ borderchars: ['─', '│', '─', '│', '┌', '┐', '┘', '└'],
+                \ filter: 's:EvalPopupFilter',
+                \ filtermode: 'n',
+                \ scrollbar: v:true,
+                \ scrollbarhighlight: 'EvalScrollbar',
+                \ thumbhighlight: 'EvalScrollbarThumb',
+                \ })
+    call setwinvar(eval_winid, '&wrap', 1)
+    call setbufvar(winbufnr(eval_winid), '&filetype', 'yaml')
+    " call win_execute(eval_winid, 'syntax enable')
+    " call setbufvar(winbufnr(eval_winid), '&scrolloff', '999')
+    call win_gotoid(eval_winid)
   endif
 endfunc
 
