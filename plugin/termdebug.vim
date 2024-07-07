@@ -912,6 +912,14 @@ func s:InstallCommands()
   if map
     let s:k_map_saved = maparg('K', 'n', 0, 1)
     nnoremap K :Evaluate<CR>
+    nnoremap  :Stop<CR>
+    nnoremap ;b :Break<CR>
+    nnoremap ;B :Clear<CR>
+    nnoremap ;c :Continue<CR>
+    nnoremap ;u :Until<CR>
+    nnoremap ;f :Finish<CR>
+    nnoremap ;n :Over<CR>
+    nnoremap ;s :Step<CR>
   endif
 
   if has('menu') && &mouse != ''
