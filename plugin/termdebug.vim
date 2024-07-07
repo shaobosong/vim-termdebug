@@ -154,7 +154,7 @@ func s:StartDebug_internal(dict)
 
   let s:save_columns = 0
   let s:allleft = 0
-  let wide = 0
+  let wide = 1
   if exists('g:termdebug_config')
     let wide = get(g:termdebug_config, 'wide', 0)
   elseif exists('g:termdebug_wide')
